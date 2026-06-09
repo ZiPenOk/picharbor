@@ -1391,6 +1391,10 @@ h2 {
   background: #f4dfdf;
 }
 
+.spin {
+  animation: ph-spin 0.9s linear infinite;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -1422,6 +1426,16 @@ button:disabled {
   font-size: 12px;
   font-style: normal;
   text-align: right;
+}
+
+.progress-bar-indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-bar-indeterminate span {
+  width: 34% !important;
+  animation: ph-progress-sweep 1.45s ease-in-out infinite;
 }
 
 .task-detail {
@@ -2840,6 +2854,93 @@ h2,
   font-size: 12px;
 }
 
+.task-item.is-parsing {
+  border-color: color-mix(in srgb, var(--ph-primary) 28%, var(--ph-line));
+  background: color-mix(in srgb, var(--ph-primary-soft) 50%, var(--ph-surface));
+}
+
+.task-phase-strip,
+.task-phase-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px dashed var(--ph-line);
+  border-radius: 8px;
+  color: var(--ph-text-soft);
+  background: color-mix(in srgb, var(--ph-surface) 82%, var(--ph-primary-soft));
+}
+
+.task-phase-strip strong,
+.task-phase-card strong {
+  color: inherit;
+  font-size: 12px;
+}
+
+.task-phase-strip span:last-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-phase-card {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.task-phase-card > div {
+  min-width: 0;
+}
+
+.task-phase-card p {
+  margin: 4px 0 0;
+  color: var(--ph-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.task-phase-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.task-phase-dot.pulse {
+  animation: ph-pulse 1.5s ease-out infinite;
+}
+
+.task-phase-strip.running,
+.task-phase-card.running {
+  border-color: color-mix(in srgb, var(--ph-primary) 34%, var(--ph-line));
+  color: var(--ph-primary-strong);
+  background: color-mix(in srgb, var(--ph-primary-soft) 72%, var(--ph-surface));
+}
+
+.task-phase-strip.queued,
+.task-phase-card.queued {
+  border-color: color-mix(in srgb, var(--ph-amber) 34%, var(--ph-line));
+  color: var(--ph-amber);
+  background: color-mix(in srgb, var(--ph-amber-soft) 82%, var(--ph-surface));
+}
+
+.task-phase-strip.paused,
+.task-phase-card.paused {
+  border-color: color-mix(in srgb, var(--ph-muted) 28%, var(--ph-line));
+  color: var(--ph-muted);
+  background: color-mix(in srgb, var(--ph-surface-2) 90%, var(--ph-surface));
+}
+
+.task-phase-strip.error,
+.task-phase-card.error {
+  border-color: color-mix(in srgb, var(--ph-red) 28%, var(--ph-line));
+  color: var(--ph-red);
+  background: color-mix(in srgb, var(--ph-red-soft) 86%, var(--ph-surface));
+}
+
 .task-inline-actions {
   display: grid;
   grid-auto-flow: column;
@@ -2847,6 +2948,40 @@ h2,
   align-items: center;
   gap: 6px;
   padding: 10px 10px 10px 0;
+}
+
+@keyframes ph-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ph-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 26%, transparent);
+  }
+
+  70% {
+    box-shadow: 0 0 0 9px color-mix(in srgb, currentColor 0%, transparent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+@keyframes ph-progress-sweep {
+  0% {
+    transform: translateX(-130%);
+  }
+
+  50% {
+    transform: translateX(20%);
+  }
+
+  100% {
+    transform: translateX(240%);
+  }
 }
 
 .compact-action {

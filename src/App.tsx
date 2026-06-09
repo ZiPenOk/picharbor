@@ -93,6 +93,81 @@ const statusMeta: Record<TaskStatus, { label: string; icon: LucideIcon; classNam
   error: { label: '出错', icon: CirclePause, className: 'error' },
 }
 
+function taskIsPendingMetadata(task?: Pick<DownloadTask, 'folder' | 'images'> | null) {
+  return Boolean(task && task.images === 0 && !task.folder)
+}
+
+function taskPhaseMeta(task?: DownloadTask | null) {
+  if (!task) {
+    return null
+  }
+
+  const pendingMetadata = taskIsPendingMetadata(task)
+  if (pendingMetadata) {
+    if (task.status === 'queued') {
+      return {
+        busy: false,
+        detail: '任务已经入队，轮到它时会自动访问站点并开始建立下载上下文。',
+        isParsing: true,
+        label: '等待解析',
+        tone: 'queued',
+      }
+    }
+
+    if (task.status === 'downloading') {
+      return {
+        busy: true,
+        detail: '正在访问站点、携带 Cookie / FlareSolverr 建立下载上下文。',
+        isParsing: true,
+        label: '站点解析中',
+        tone: 'running',
+      }
+    }
+
+    if (task.status === 'paused') {
+      return {
+        busy: false,
+        detail: '当前任务停在解析阶段，继续后会从站点识别步骤接着走。',
+        isParsing: true,
+        label: '解析已暂停',
+        tone: 'paused',
+      }
+    }
+
+    if (task.status === 'error') {
+      return {
+        busy: false,
+        detail: '站点没有成功返回相册数据，补 Cookie 或网络设置后可直接重试。',
+        isParsing: true,
+        label: '解析失败',
+        tone: 'error',
+      }
+    }
+  }
+
+  if (task.status === 'queued') {
+    return {
+      busy: false,
+      detail: '已完成站点识别，等待前面的任务下载结束。',
+      isParsing: false,
+      label: '等待下载',
+      tone: 'queued',
+    }
+  }
+
+  if (task.status === 'downloading') {
+    return {
+      busy: true,
+      detail: '媒体文件正在顺序写入本地目录。',
+      isParsing: false,
+      label: '下载进行中',
+      tone: 'running',
+    }
+  }
+
+  return null
+}
+
 function sourceSettingsId(source: Source) {
   return source.id
 }
@@ -1320,8 +1395,8 @@ function App() {
         value={taskUrl}
       />
       <button type="button" onClick={handleCreateTask} disabled={isCreatingTask}>
-        <Download size={17} aria-hidden="true" />
-        加入队列
+        {isCreatingTask ? <RefreshCw className="spin" size={17} aria-hidden="true" /> : <Download size={17} aria-hidden="true" />}
+        {isCreatingTask ? '加入中...' : '加入队列'}
       </button>
       {taskMessage && <span>{taskMessage}</span>}
       {(isInspectingTaskUrls || taskUrlInspectionSummary.total) && (
@@ -1403,7 +1478,8 @@ function App() {
               const completedItems = task.completedImages ?? Math.round((task.progress / 100) * task.images)
               const failedCount = task.failedCount ?? task.failedImages?.length ?? 0
               const remainingItems = task.remainingImages ?? Math.max(0, task.images - completedItems)
-              const isPendingMetadata = task.images === 0 && !task.folder
+              const isPendingMetadata = taskIsPendingMetadata(task)
+              const phase = taskPhaseMeta(task)
               const mediaSummary = mediaSummaryForItem({
                 count: task.images,
                 imageCount: task.imageCount,
@@ -1424,7 +1500,10 @@ function App() {
 
               if (!compact) {
                 return (
-                  <article className={task.id === selectedTask?.id ? 'task-item task-row active' : 'task-item task-row'} key={task.id}>
+                  <article
+                    className={`${task.id === selectedTask?.id ? 'task-item task-row active' : 'task-item task-row'}${phase?.isParsing ? ' is-parsing' : ''}`}
+                    key={task.id}
+                  >
                     <button className="task-row-main" onClick={openTaskDetail} type="button">
                       <div className="task-row-head">
                         <span className={`status-pill ${meta.className}`}>
@@ -1444,12 +1523,20 @@ function App() {
                         </span>
                       </div>
 
-                      <div className="progress-row task-row-progress">
-                        <div className="progress-bar">
+                        <div className="progress-row task-row-progress">
+                        <div className={phase?.busy ? 'progress-bar progress-bar-indeterminate' : 'progress-bar'}>
                           <span style={{ width: `${task.progress}%` }} />
                         </div>
                         <em>{task.progress}%</em>
                       </div>
+
+                      {phase?.isParsing && (
+                        <div className={`task-phase-strip ${phase.tone}`}>
+                          <span className={phase.busy ? 'task-phase-dot pulse' : 'task-phase-dot'} aria-hidden="true" />
+                          <strong>{phase.label}</strong>
+                          <span>{phase.detail}</span>
+                        </div>
+                      )}
 
                       <div className="task-row-foot">
                         <span>{task.currentImage || task.folder}</span>
@@ -1510,7 +1597,7 @@ function App() {
 
               return (
                 <button
-                  className={task.id === selectedTask?.id ? 'task-item active' : 'task-item'}
+                  className={`${task.id === selectedTask?.id ? 'task-item active' : 'task-item'}${phase?.isParsing ? ' is-parsing' : ''}`}
                   key={task.id}
                   onClick={openTaskDetail}
                   type="button"
@@ -1601,7 +1688,8 @@ function App() {
     const successImages = selectedTask.successImages ?? Math.max(0, completedImages - (selectedTask.failedCount ?? 0))
     const failedCount = selectedTask.failedCount ?? selectedTask.failedImages?.length ?? 0
     const remainingImages = selectedTask.remainingImages ?? Math.max(0, selectedTask.images - completedImages)
-    const isPendingMetadata = selectedTask.images === 0 && !selectedTask.folder
+    const isPendingMetadata = taskIsPendingMetadata(selectedTask)
+    const selectedTaskPhase = taskPhaseMeta(selectedTask)
     const canPause = selectedTask.status === 'downloading' || selectedTask.status === 'queued'
     const canResume = selectedTask.status === 'paused'
     const canRetry = selectedTask.status === 'partial' || selectedTask.status === 'error' || failedCount > 0
@@ -1659,13 +1747,23 @@ function App() {
 
         <div className="task-detail-progress">
           <div className="progress-row">
-            <div className="progress-bar">
+            <div className={selectedTaskPhase?.busy ? 'progress-bar progress-bar-indeterminate' : 'progress-bar'}>
               <span style={{ width: `${selectedTask.progress}%` }} />
             </div>
             <em>{selectedTask.progress}%</em>
           </div>
           <span>{selectedTask.speed}</span>
         </div>
+
+        {selectedTaskPhase && (
+          <div className={`task-phase-card ${selectedTaskPhase.tone}`}>
+            <div>
+              <strong>{selectedTaskPhase.label}</strong>
+              <p>{selectedTaskPhase.detail}</p>
+            </div>
+            <span className={selectedTaskPhase.busy ? 'task-phase-dot pulse' : 'task-phase-dot'} aria-hidden="true" />
+          </div>
+        )}
 
         <div className="task-metric-grid" aria-label="任务统计">
           <article>
