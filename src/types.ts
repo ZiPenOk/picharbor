@@ -1,11 +1,29 @@
 export type TaskStatus = 'downloading' | 'queued' | 'paused' | 'done' | 'partial' | 'error'
 
+export type TaskStage =
+  | 'parse_queued'
+  | 'parsing'
+  | 'pausing_parse'
+  | 'paused_parse'
+  | 'error_parse'
+  | 'download_queued'
+  | 'downloading'
+  | 'pausing_download'
+  | 'paused_download'
+  | 'error_download'
+  | 'retry_queued'
+  | 'retrying'
+  | 'done'
+  | 'partial'
+
 export type DownloadTask = {
   id: number
   albumId?: string
   title: string
   site: string
   status: TaskStatus
+  stage?: TaskStage
+  stageMessage?: string
   progress: number
   speed: string
   eta: string

@@ -682,6 +682,66 @@ function enrichTask(task) {
     task.currentImage ??
     job?.remoteAlbum?.images?.[Math.min(completedImages, Math.max(0, totalImages - 1))]?.title ??
     ''
+  const hasDownloadContext = Boolean(task.folder || album?.id || job?.remoteAlbum?.id)
+  const isRetryJob = Boolean(job?.downloadImages?.length)
+  let stage = 'download_queued'
+
+  if (task.status === 'done') {
+    stage = 'done'
+  } else if (task.status === 'partial') {
+    stage = 'partial'
+  } else if (task.status === 'error') {
+    stage = hasDownloadContext ? 'error_download' : 'error_parse'
+  } else if (task.status === 'paused') {
+    if (task.pauseRequested) {
+      stage = hasDownloadContext ? 'pausing_download' : 'pausing_parse'
+    } else {
+      stage = hasDownloadContext ? 'paused_download' : 'paused_parse'
+    }
+  } else if (task.status === 'queued') {
+    if (!hasDownloadContext) {
+      stage = 'parse_queued'
+    } else {
+      stage = isRetryJob ? 'retry_queued' : 'download_queued'
+    }
+  } else if (task.status === 'downloading') {
+    if (!hasDownloadContext) {
+      stage = 'parsing'
+    } else {
+      stage = isRetryJob ? 'retrying' : 'downloading'
+    }
+  }
+
+  let stageMessage = '已完成站点识别，等待前面的任务结束后开始下载。'
+  if (stage === 'parse_queued') {
+    stageMessage = '任务已经入队，轮到它时会自动访问站点并建立下载上下文。'
+  } else if (stage === 'parsing') {
+    stageMessage = '正在访问站点、携带 Cookie 或 FlareSolverr，并解析相册元数据。'
+  } else if (stage === 'pausing_parse') {
+    stageMessage = '正在等待当前解析步骤结束，随后会停在站点解析阶段。'
+  } else if (stage === 'paused_parse') {
+    stageMessage = '任务停在站点解析阶段，继续后会从相册识别步骤接着走。'
+  } else if (stage === 'error_parse') {
+    stageMessage = '站点没有成功返回相册数据，补 Cookie 或网络设置后可直接重试。'
+  } else if (stage === 'download_queued') {
+    stageMessage = '站点解析已完成，等待前面的任务下载结束。'
+  } else if (stage === 'downloading') {
+    stageMessage = '媒体文件正在按页面顺序写入本地目录。'
+  } else if (stage === 'pausing_download') {
+    stageMessage = '正在等待当前媒体完成，随后会停在现有下载进度上。'
+  } else if (stage === 'paused_download') {
+    stageMessage = '任务停在下载阶段，继续后会从当前进度接着下载。'
+  } else if (stage === 'error_download') {
+    stageMessage = '下载过程中断，可直接重试失败项。'
+  } else if (stage === 'retry_queued') {
+    stageMessage = `已收集 ${failedCount} 项失败项，等待进入重试下载队列。`
+  } else if (stage === 'retrying') {
+    stageMessage = `正在重试失败项，当前剩余 ${remainingImages} 项。`
+  } else if (stage === 'partial') {
+    stageMessage = `任务已完成，但仍有 ${failedCount} 项失败，可直接重试。`
+  } else if (stage === 'done') {
+    stageMessage = '任务已经完成，所有媒体都已写入本地目录。'
+  }
 
   return {
     ...task,
@@ -694,6 +754,8 @@ function enrichTask(task) {
     mediaSummary: task.mediaSummary ?? album?.mediaSummary,
     remainingImages,
     successImages,
+    stage,
+    stageMessage,
     videoCount: task.videoCount ?? album?.videoCount,
   }
 }

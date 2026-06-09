@@ -61,7 +61,7 @@ import {
   setupAuth,
   updateAuth,
 } from './lib/api'
-import type { AppData, AppSettings, AuthStatus, DownloadTask, Photo, Source, TaskStatus, TaskUrlInspection } from './types'
+import type { AppData, AppSettings, AuthStatus, DownloadTask, Photo, Source, TaskStage, TaskStatus, TaskUrlInspection } from './types'
 import './App.css'
 
 type ViewId = 'overview' | 'tasks' | 'library' | 'tags' | 'sources' | 'settings'
@@ -93,7 +93,100 @@ const statusMeta: Record<TaskStatus, { label: string; icon: LucideIcon; classNam
   error: { label: '出错', icon: CirclePause, className: 'error' },
 }
 
-function taskIsPendingMetadata(task?: Pick<DownloadTask, 'folder' | 'images'> | null) {
+const parseTaskStages = new Set<TaskStage>(['parse_queued', 'parsing', 'pausing_parse', 'paused_parse', 'error_parse'])
+const activeTaskStages = new Set<TaskStage>([
+  'parse_queued',
+  'parsing',
+  'pausing_parse',
+  'paused_parse',
+  'download_queued',
+  'downloading',
+  'pausing_download',
+  'paused_download',
+  'retry_queued',
+  'retrying',
+])
+const fastPollingTaskStages = new Set<TaskStage>([
+  'parse_queued',
+  'parsing',
+  'pausing_parse',
+  'download_queued',
+  'downloading',
+  'pausing_download',
+  'retry_queued',
+  'retrying',
+])
+
+function taskStageValue(task?: Pick<DownloadTask, 'folder' | 'images' | 'pauseRequested' | 'stage' | 'status'> | null): TaskStage | null {
+  if (!task) {
+    return null
+  }
+
+  if (task.stage) {
+    return task.stage
+  }
+
+  const pendingMetadata = task.images === 0 && !task.folder
+  if (task.status === 'done' || task.status === 'partial') {
+    return task.status
+  }
+
+  if (pendingMetadata) {
+    if (task.status === 'queued') {
+      return 'parse_queued'
+    }
+    if (task.status === 'downloading') {
+      return 'parsing'
+    }
+    if (task.status === 'paused') {
+      return task.pauseRequested ? 'pausing_parse' : 'paused_parse'
+    }
+    if (task.status === 'error') {
+      return 'error_parse'
+    }
+    return 'parse_queued'
+  }
+
+  if (task.status === 'queued') {
+    return 'download_queued'
+  }
+  if (task.status === 'downloading') {
+    return 'downloading'
+  }
+  if (task.status === 'paused') {
+    return task.pauseRequested ? 'pausing_download' : 'paused_download'
+  }
+  if (task.status === 'error') {
+    return 'error_download'
+  }
+
+  return null
+}
+
+function taskCountsAsActive(task: Pick<DownloadTask, 'folder' | 'images' | 'pauseRequested' | 'stage' | 'status'>) {
+  const stage = taskStageValue(task)
+  if (stage) {
+    return activeTaskStages.has(stage)
+  }
+
+  return ['downloading', 'queued', 'paused'].includes(task.status)
+}
+
+function taskNeedsFastPolling(task: Pick<DownloadTask, 'folder' | 'images' | 'pauseRequested' | 'stage' | 'status'>) {
+  const stage = taskStageValue(task)
+  if (stage) {
+    return fastPollingTaskStages.has(stage)
+  }
+
+  return ['downloading', 'queued'].includes(task.status)
+}
+
+function taskIsPendingMetadata(task?: Pick<DownloadTask, 'folder' | 'images' | 'pauseRequested' | 'stage' | 'status'> | null) {
+  const stage = taskStageValue(task)
+  if (stage) {
+    return parseTaskStages.has(stage)
+  }
+
   return Boolean(task && task.images === 0 && !task.folder)
 }
 
@@ -102,70 +195,38 @@ function taskPhaseMeta(task?: DownloadTask | null) {
     return null
   }
 
-  const pendingMetadata = taskIsPendingMetadata(task)
-  if (pendingMetadata) {
-    if (task.status === 'queued') {
-      return {
-        busy: false,
-        detail: '任务已经入队，轮到它时会自动访问站点并开始建立下载上下文。',
-        isParsing: true,
-        label: '等待解析',
-        tone: 'queued',
-      }
-    }
-
-    if (task.status === 'downloading') {
-      return {
-        busy: true,
-        detail: '正在访问站点、携带 Cookie / FlareSolverr 建立下载上下文。',
-        isParsing: true,
-        label: '站点解析中',
-        tone: 'running',
-      }
-    }
-
-    if (task.status === 'paused') {
-      return {
-        busy: false,
-        detail: '当前任务停在解析阶段，继续后会从站点识别步骤接着走。',
-        isParsing: true,
-        label: '解析已暂停',
-        tone: 'paused',
-      }
-    }
-
-    if (task.status === 'error') {
-      return {
-        busy: false,
-        detail: '站点没有成功返回相册数据，补 Cookie 或网络设置后可直接重试。',
-        isParsing: true,
-        label: '解析失败',
-        tone: 'error',
-      }
-    }
+  const stage = taskStageValue(task)
+  const detail = task.stageMessage
+  switch (stage) {
+    case 'parse_queued':
+      return { busy: false, detail: detail ?? '任务已经入队，轮到它时会自动访问站点并开始建立下载上下文。', isParsing: true, label: '等待解析', tone: 'queued' }
+    case 'parsing':
+      return { busy: true, detail: detail ?? '正在访问站点、携带 Cookie / FlareSolverr 建立下载上下文。', isParsing: true, label: '站点解析中', tone: 'running' }
+    case 'pausing_parse':
+      return { busy: true, detail: detail ?? '正在等待当前解析步骤结束，随后会停在站点解析阶段。', isParsing: true, label: '解析暂停中', tone: 'paused' }
+    case 'paused_parse':
+      return { busy: false, detail: detail ?? '当前任务停在解析阶段，继续后会从站点识别步骤接着走。', isParsing: true, label: '解析已暂停', tone: 'paused' }
+    case 'error_parse':
+      return { busy: false, detail: detail ?? '站点没有成功返回相册数据，补 Cookie 或网络设置后可直接重试。', isParsing: true, label: '解析失败', tone: 'error' }
+    case 'download_queued':
+      return { busy: false, detail: detail ?? '已完成站点识别，等待前面的任务下载结束。', isParsing: false, label: '等待下载', tone: 'queued' }
+    case 'downloading':
+      return { busy: true, detail: detail ?? '媒体文件正在顺序写入本地目录。', isParsing: false, label: '下载进行中', tone: 'running' }
+    case 'pausing_download':
+      return { busy: true, detail: detail ?? '正在等待当前媒体完成，随后会停在现有下载进度上。', isParsing: false, label: '下载暂停中', tone: 'paused' }
+    case 'paused_download':
+      return { busy: false, detail: detail ?? '当前任务停在下载阶段，继续后会从当前进度接着走。', isParsing: false, label: '下载已暂停', tone: 'paused' }
+    case 'retry_queued':
+      return { busy: false, detail: detail ?? '失败项已经收集完成，等待进入重试下载队列。', isParsing: false, label: '等待重试', tone: 'queued' }
+    case 'retrying':
+      return { busy: true, detail: detail ?? '失败项正在重新下载。', isParsing: false, label: '重试进行中', tone: 'running' }
+    case 'error_download':
+      return { busy: false, detail: detail ?? '下载过程中断，可直接重试失败项。', isParsing: false, label: '下载失败', tone: 'error' }
+    case 'partial':
+      return { busy: false, detail: detail ?? '任务主体已完成，但仍有失败项可直接重试。', isParsing: false, label: '部分完成', tone: 'error' }
+    default:
+      return null
   }
-
-  if (task.status === 'queued') {
-    return {
-      busy: false,
-      detail: '已完成站点识别，等待前面的任务下载结束。',
-      isParsing: false,
-      label: '等待下载',
-      tone: 'queued',
-    }
-  }
-
-  if (task.status === 'downloading') {
-    return {
-      busy: true,
-      detail: '媒体文件正在顺序写入本地目录。',
-      isParsing: false,
-      label: '下载进行中',
-      tone: 'running',
-    }
-  }
-
-  return null
 }
 
 function sourceSettingsId(source: Source) {
@@ -493,6 +554,27 @@ function App() {
 
   const { albums, photos, sources, stats, tasks } = appData
   const normalizedQuery = query.trim().toLowerCase()
+  const hasActivePipelineTask = useMemo(() => tasks.some((task) => taskNeedsFastPolling(task)), [tasks])
+
+  const upsertTasks = useCallback((incomingTasks: DownloadTask[], prepend = true) => {
+    if (!incomingTasks.length) {
+      return
+    }
+
+    setAppData((current) => {
+      const incomingIds = new Set(incomingTasks.map((task) => task.id))
+      const preservedTasks = current.tasks.filter((task) => !incomingIds.has(task.id))
+      const nextTasks = prepend ? [...incomingTasks, ...preservedTasks] : [...preservedTasks, ...incomingTasks]
+      return {
+        ...current,
+        stats: {
+          ...current.stats,
+          activeTasks: nextTasks.filter((task) => taskCountsAsActive(task)).length,
+        },
+        tasks: nextTasks,
+      }
+    })
+  }, [])
 
   const updateSelectedAlbumId = (albumId: string) => {
     selectedAlbumIdRef.current = albumId
@@ -618,13 +700,14 @@ function App() {
       return undefined
     }
 
+    const pollIntervalMs = hasActivePipelineTask ? 1200 : 4500
     const firstRefresh = window.setTimeout(() => {
       void refreshData()
       void refreshSettings()
     }, 0)
     const timer = window.setInterval(() => {
       void refreshData()
-    }, 3000)
+    }, pollIntervalMs)
 
     return () => {
       window.clearTimeout(firstRefresh)
@@ -632,7 +715,7 @@ function App() {
     }
     // The polling callback intentionally reads the latest server snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus?.user?.username])
+  }, [authStatus?.user?.username, hasActivePipelineTask])
 
   useEffect(() => {
     window.localStorage.setItem('picharbor-theme', themeMode)
@@ -1296,6 +1379,7 @@ function App() {
       updateSelectedTaskId(createdTasks[0].id)
       setIsTaskDetailOpen(createdTasks.length === 1)
       setTaskUrl('')
+      setTaskUrlInspections([])
       setTaskPage(1)
       setTaskMessage(
         failures.length
@@ -1304,18 +1388,7 @@ function App() {
             ? '任务已加入队列，后台正在解析站点'
             : `已按顺序加入 ${createdTasks.length} 个任务，后台会依次解析下载`,
       )
-      setAppData((current) => {
-        const currentTasks = current.tasks.filter((task) => !createdTasks.some((created) => created.id === task.id))
-        const nextTasks = [...createdTasks, ...currentTasks]
-        return {
-          ...current,
-          stats: {
-            ...current.stats,
-            activeTasks: nextTasks.filter((task) => ['downloading', 'queued', 'paused'].includes(task.status)).length,
-          },
-          tasks: nextTasks,
-        }
-      })
+      upsertTasks(createdTasks)
       setActiveView('tasks')
       void refreshData()
     } catch (error) {
@@ -1334,8 +1407,9 @@ function App() {
       const nextTask =
         action === 'pause' ? await pauseTask(task.id) : action === 'resume' ? await resumeTask(task.id) : await retryTask(task.id)
       updateSelectedTaskId(nextTask.id)
+      upsertTasks([nextTask])
       setTaskActionMessage(action === 'pause' ? '已发送暂停请求' : action === 'resume' ? '任务已继续' : '已加入重试队列')
-      await refreshData()
+      void refreshData()
     } catch (error) {
       const fallback = action === 'pause' ? '暂停失败' : action === 'resume' ? '继续失败' : '重试失败'
       setTaskActionMessage(error instanceof Error ? error.message : fallback)
