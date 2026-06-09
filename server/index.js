@@ -546,6 +546,10 @@ function findJobByTaskId(taskId) {
   return pendingDownloadJobs.find((job) => job.task?.id === taskId) ?? pausedDownloadJobs.get(taskId)
 }
 
+function findOpenTaskBySourceUrl(sourceUrl) {
+  return tasks.find((task) => task.sourceUrl === sourceUrl && !['done', 'partial', 'error'].includes(task.status))
+}
+
 function findAlbumForTask(task, job = findJobByTaskId(task.id)) {
   if (job?.album) {
     return albums.find((album) => album.id === job.remoteAlbum?.id) ?? job.album
@@ -706,6 +710,16 @@ function getAppData() {
 
 function getSources() {
   return getAppData().sources
+}
+
+function pendingTitleForUrl(inputUrl, adapter) {
+  try {
+    const parsedUrl = new URL(inputUrl)
+    const lastPathPart = parsedUrl.pathname.split('/').filter(Boolean).at(-1)
+    return `等待解析 · ${lastPathPart ?? parsedUrl.hostname}`
+  } catch {
+    return `等待解析 · ${adapter.name}`
+  }
 }
 
 function siteCookieFileFor(siteId) {
@@ -1569,6 +1583,42 @@ function createLocalAlbum(remoteAlbum) {
   }
 }
 
+function createAlbumRecord(localAlbum, sourceName, status = '等待下载') {
+  return {
+    id: localAlbum.id,
+    title: localAlbum.title,
+    source: sourceName,
+    count: localAlbum.images.length,
+    imageCount: localAlbum.imageCount,
+    mediaSummary: localAlbum.mediaSummary,
+    videoCount: localAlbum.videoCount,
+    size: '待统计',
+    updated: '刚刚创建',
+    status,
+    cover: localAlbum.cover,
+    tags: localAlbum.tags,
+  }
+}
+
+function photoRecordFromImage(image, albumId) {
+  return {
+    id: image.id,
+    albumId,
+    title: image.title,
+    mediaType: image.mediaType,
+    posterUrl: image.posterUrl,
+    thumbUrl: image.thumbUrl,
+    url: image.url,
+    resolution: image.resolution,
+    size: image.size,
+    tags: image.tags,
+  }
+}
+
+function addPhotosForLocalAlbum(localAlbum) {
+  photos.unshift(...localAlbum.images.map((image) => photoRecordFromImage(image, localAlbum.id)))
+}
+
 async function downloadWithFetch(imageUrl, localPath, referer, mediaType = mediaTypeForUrl(imageUrl)) {
   const response = await fetch(imageUrl, {
     headers: imageRequestHeaders(imageUrl, referer, mediaType),
@@ -1841,6 +1891,55 @@ async function processDownloadJob(job) {
   await createManifest(remoteAlbum, task)
 }
 
+async function hydrateDownloadJob(job) {
+  if (job.remoteAlbum && job.album) {
+    return job
+  }
+
+  const { adapter, task } = job
+  task.status = 'downloading'
+  task.speed = '正在解析站点...'
+  task.eta = '等待站点响应'
+  task.currentImage = '站点解析中'
+  task.progress = 1
+  task.completedImages = 0
+  task.successImages = 0
+  task.failedImages = []
+  task.failedCount = 0
+  task.remainingImages = 0
+
+  const remoteAlbum = await adapter.parse(task.sourceUrl)
+  const localAlbum = createLocalAlbum(remoteAlbum)
+  const existingJob = findActiveOrQueuedAlbumJob(localAlbum.id, task.sourceUrl)
+  if (existingJob && existingJob.task.id !== task.id) {
+    throw new Error('相同相册已经在队列中')
+  }
+
+  removeRuntimeAlbum(localAlbum.id, localAlbum.folder, task.sourceUrl)
+  tasks.unshift(task)
+
+  task.title = localAlbum.title
+  task.site = adapter.name
+  task.folder = localAlbum.folder
+  task.images = localAlbum.images.length
+  task.imageCount = localAlbum.imageCount
+  task.mediaSummary = localAlbum.mediaSummary
+  task.videoCount = localAlbum.videoCount
+  task.speed = '等待下载'
+  task.eta = `${localAlbum.images.length} 项`
+  task.currentImage = '等待下载'
+  task.remainingImages = localAlbum.images.length
+
+  const album = createAlbumRecord(localAlbum, adapter.name)
+  albums.unshift(album)
+  addPhotosForLocalAlbum(localAlbum)
+  await createManifest(localAlbum, task)
+
+  job.remoteAlbum = localAlbum
+  job.album = album
+  return job
+}
+
 function runNextDownloadJob() {
   if (activeDownloadJob) {
     return
@@ -1856,17 +1955,25 @@ function runNextDownloadJob() {
   }
 
   activeDownloadJob = job
-  processDownloadJob(job)
+  Promise.resolve()
+    .then(() => hydrateDownloadJob(job))
+    .then((readyJob) => processDownloadJob(readyJob))
     .catch(async (error) => {
       console.error(error)
       job.task.status = 'error'
-      job.task.speed = '下载失败'
+      job.task.speed = job.remoteAlbum ? '下载失败' : '解析失败'
       job.task.eta = error instanceof Error ? error.message : '下载失败'
-      job.album.status = '下载失败'
-      try {
-        await createManifest(job.remoteAlbum, job.task)
-      } catch (manifestError) {
-        console.warn('Failed to persist errored task:', manifestError instanceof Error ? manifestError.message : manifestError)
+      job.task.currentImage = job.remoteAlbum ? '' : '站点解析失败'
+      if (job.album) {
+        job.album.status = job.remoteAlbum ? '下载失败' : '解析失败'
+        job.album.updated = '刚刚失败'
+      }
+      if (job.remoteAlbum) {
+        try {
+          await createManifest(job.remoteAlbum, job.task)
+        } catch (manifestError) {
+          console.warn('Failed to persist errored task:', manifestError instanceof Error ? manifestError.message : manifestError)
+        }
       }
     })
     .finally(() => {
@@ -1958,19 +2065,25 @@ async function pauseTask(taskId) {
     task.pauseRequested = false
     task.speed = '已暂停'
     task.eta = '手动继续'
-    queuedJob.album.status = '已暂停'
-    queuedJob.album.updated = '等待继续'
+    if (queuedJob.album) {
+      queuedJob.album.status = '已暂停'
+      queuedJob.album.updated = '等待继续'
+    }
     pausedDownloadJobs.set(task.id, queuedJob)
-    await createManifest(queuedJob.remoteAlbum, task)
+    if (queuedJob.remoteAlbum) {
+      await createManifest(queuedJob.remoteAlbum, task)
+    }
     return { task: enrichTask(task), statusCode: 200 }
   }
 
   if (activeDownloadJob?.task?.id === taskId) {
     task.pauseRequested = true
     task.status = 'paused'
-    task.speed = '暂停中，当前图片完成后停止'
+    task.speed = activeDownloadJob.remoteAlbum ? '暂停中，当前媒体完成后停止' : '暂停中，等待当前解析结束'
     task.eta = '手动继续'
-    activeDownloadJob.album.status = '暂停中'
+    if (activeDownloadJob.album) {
+      activeDownloadJob.album.status = '暂停中'
+    }
     return { task: enrichTask(task), statusCode: 202 }
   }
 
@@ -2011,9 +2124,11 @@ async function resumeTask(taskId) {
   pausedDownloadJobs.delete(taskId)
   task.status = 'queued'
   task.pauseRequested = false
-  task.speed = '等待继续'
-  task.eta = `${task.completedImages || 0}/${task.images} 项`
-  job.album.status = '等待继续'
+  task.speed = job.remoteAlbum ? '等待继续' : '等待开始'
+  task.eta = job.remoteAlbum ? `${task.completedImages || 0}/${task.images} 项` : '准备解析'
+  if (job.album) {
+    job.album.status = '等待继续'
+  }
   pendingDownloadJobs.push(job)
   runNextDownloadJob()
 
@@ -2064,6 +2179,29 @@ async function retryTask(taskId) {
   const pendingJob = pendingDownloadJobs.find((job) => job.task?.id === taskId)
   if (pendingJob || task.status === 'queued') {
     return { task: enrichTask(task), statusCode: 200 }
+  }
+
+  if (!task.folder && task.sourceUrl) {
+    const adapter = resolveAdapter(task.sourceUrl)
+    if (!adapter) {
+      return { error: '没有匹配的站点适配器', statusCode: 422 }
+    }
+
+    task.status = 'queued'
+    task.progress = 0
+    task.pauseRequested = false
+    task.currentImage = '等待站点解析'
+    task.completedImages = 0
+    task.successImages = 0
+    task.failedImages = []
+    task.failedCount = 0
+    task.remainingImages = 0
+    task.speed = '等待开始'
+    task.eta = '准备解析'
+    task.title = pendingTitleForUrl(task.sourceUrl, adapter)
+    pendingDownloadJobs.push({ adapter, task })
+    runNextDownloadJob()
+    return { task: enrichTask(task), statusCode: 202 }
   }
 
   let job = pausedDownloadJobs.get(taskId)
@@ -2370,75 +2508,39 @@ async function createTask(payload) {
     return { error: '没有匹配的站点适配器', statusCode: 422 }
   }
 
-  let remoteAlbum
-  try {
-    remoteAlbum = await adapter.parse(inputUrl)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '站点解析失败'
-    return { error: message, statusCode: 502 }
+  const existingTask = findOpenTaskBySourceUrl(inputUrl)
+  if (existingTask) {
+    return { task: enrichTask(existingTask), statusCode: 200 }
   }
-  const localAlbum = createLocalAlbum(remoteAlbum)
-  const existingJob = findActiveOrQueuedAlbumJob(localAlbum.id, inputUrl)
-  if (existingJob) {
-    return { task: existingJob.task, statusCode: 200 }
-  }
-
-  removeRuntimeAlbum(localAlbum.id, localAlbum.folder, inputUrl)
 
   const task = {
     id: nextTaskId++,
-    title: localAlbum.title,
+    title: pendingTitleForUrl(inputUrl, adapter),
     site: adapter.name,
     status: 'queued',
     progress: 0,
-    speed: '等待下载',
-    eta: `${localAlbum.images.length} 项`,
-    images: localAlbum.images.length,
-    imageCount: localAlbum.imageCount,
-    mediaSummary: localAlbum.mediaSummary,
-    videoCount: localAlbum.videoCount,
-    folder: localAlbum.folder,
+    speed: '等待开始',
+    eta: '准备解析',
+    images: 0,
+    imageCount: 0,
+    mediaSummary: '待解析',
+    videoCount: 0,
+    folder: '',
     sourceUrl: inputUrl,
     createdAt: new Date().toISOString(),
+    completedImages: 0,
+    currentImage: '等待站点解析',
+    successImages: 0,
+    failedImages: [],
+    failedCount: 0,
+    remainingImages: 0,
   }
 
   tasks.unshift(task)
+  pendingDownloadJobs.push({ adapter, task })
+  runNextDownloadJob()
 
-  const album = {
-    id: localAlbum.id,
-    title: localAlbum.title,
-    source: adapter.name,
-    count: localAlbum.images.length,
-    imageCount: localAlbum.imageCount,
-    mediaSummary: localAlbum.mediaSummary,
-    videoCount: localAlbum.videoCount,
-    size: '待统计',
-    updated: '刚刚创建',
-    status: '等待下载',
-    cover: localAlbum.cover,
-    tags: localAlbum.tags,
-  }
-
-  albums.unshift(album)
-  photos.unshift(
-    ...localAlbum.images.map((image) => ({
-      id: image.id,
-      albumId: localAlbum.id,
-      title: image.title,
-      mediaType: image.mediaType,
-      posterUrl: image.posterUrl,
-      thumbUrl: image.thumbUrl,
-      url: image.url,
-      resolution: image.resolution,
-      size: image.size,
-      tags: image.tags,
-    })),
-  )
-
-  await createManifest(localAlbum, task)
-  enqueueDownload(localAlbum, task, album)
-
-  return { task, statusCode: 201 }
+  return { task: enrichTask(task), statusCode: 201 }
 }
 
 async function inspectTaskUrls(payload) {
@@ -2494,7 +2596,9 @@ async function inspectTaskUrls(payload) {
       flareSolverrConfigured,
       hostname: parsedUrl.hostname,
       matched: true,
-      message: siteSettings?.cookieConfigured ? `${adapter.name} 已就绪` : `${adapter.name} 可解析，建议检查 Cookie`,
+      message: siteSettings?.cookieConfigured
+        ? `${adapter.name} 已识别，可先入队后后台解析`
+        : `${adapter.name} 已识别，建议检查 Cookie；可先入队后后台解析`,
       normalizedUrl,
       url: value,
       valid: true,

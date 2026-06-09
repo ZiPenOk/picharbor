@@ -1148,13 +1148,25 @@ function App() {
       setTaskPage(1)
       setTaskMessage(
         failures.length
-          ? `已加入 ${createdTasks.length} 个任务，${failures.length} 个失败：${failures[0]}`
+          ? `已加入 ${createdTasks.length} 个任务，后台会依次解析下载；${failures.length} 个失败：${failures[0]}`
           : createdTasks.length === 1
-            ? '任务已加入队列'
-            : `已按顺序加入 ${createdTasks.length} 个任务`,
+            ? '任务已加入队列，后台正在解析站点'
+            : `已按顺序加入 ${createdTasks.length} 个任务，后台会依次解析下载`,
       )
-      await refreshData()
+      setAppData((current) => {
+        const currentTasks = current.tasks.filter((task) => !createdTasks.some((created) => created.id === task.id))
+        const nextTasks = [...createdTasks, ...currentTasks]
+        return {
+          ...current,
+          stats: {
+            ...current.stats,
+            activeTasks: nextTasks.filter((task) => ['downloading', 'queued', 'paused'].includes(task.status)).length,
+          },
+          tasks: nextTasks,
+        }
+      })
       setActiveView('tasks')
+      void refreshData()
     } catch (error) {
       const message = error instanceof Error ? error.message : '创建任务失败'
       setTaskMessage(message)
@@ -1391,6 +1403,7 @@ function App() {
               const completedItems = task.completedImages ?? Math.round((task.progress / 100) * task.images)
               const failedCount = task.failedCount ?? task.failedImages?.length ?? 0
               const remainingItems = task.remainingImages ?? Math.max(0, task.images - completedItems)
+              const isPendingMetadata = task.images === 0 && !task.folder
               const mediaSummary = mediaSummaryForItem({
                 count: task.images,
                 imageCount: task.imageCount,
@@ -1426,7 +1439,9 @@ function App() {
                         <span>{mediaSummary}</span>
                         <span>{task.speed}</span>
                         <span>{task.eta}</span>
-                        <span className={failedCount ? 'task-failed-count' : ''}>{failedCount ? `失败 ${failedCount}` : `剩余 ${remainingItems}`}</span>
+                        <span className={failedCount ? 'task-failed-count' : ''}>
+                          {failedCount ? `失败 ${failedCount}` : isPendingMetadata ? '等待解析' : `剩余 ${remainingItems}`}
+                        </span>
                       </div>
 
                       <div className="progress-row task-row-progress">
@@ -1438,9 +1453,7 @@ function App() {
 
                       <div className="task-row-foot">
                         <span>{task.currentImage || task.folder}</span>
-                        <span>
-                          {completedItems}/{task.images} 项
-                        </span>
+                        <span>{isPendingMetadata ? '待识别媒体数量' : `${completedItems}/${task.images} 项`}</span>
                       </div>
                     </button>
 
@@ -1588,6 +1601,7 @@ function App() {
     const successImages = selectedTask.successImages ?? Math.max(0, completedImages - (selectedTask.failedCount ?? 0))
     const failedCount = selectedTask.failedCount ?? selectedTask.failedImages?.length ?? 0
     const remainingImages = selectedTask.remainingImages ?? Math.max(0, selectedTask.images - completedImages)
+    const isPendingMetadata = selectedTask.images === 0 && !selectedTask.folder
     const canPause = selectedTask.status === 'downloading' || selectedTask.status === 'queued'
     const canResume = selectedTask.status === 'paused'
     const canRetry = selectedTask.status === 'partial' || selectedTask.status === 'error' || failedCount > 0
@@ -1656,9 +1670,7 @@ function App() {
         <div className="task-metric-grid" aria-label="任务统计">
           <article>
             <span>完成</span>
-            <strong>
-              {completedImages}/{selectedTask.images}
-            </strong>
+            <strong>{isPendingMetadata ? '待解析' : `${completedImages}/${selectedTask.images}`}</strong>
           </article>
           <article>
             <span>构成</span>
@@ -1666,7 +1678,7 @@ function App() {
           </article>
           <article>
             <span>成功</span>
-            <strong>{successImages}</strong>
+            <strong>{isPendingMetadata ? '待解析' : successImages}</strong>
           </article>
           <article>
             <span>失败</span>
@@ -1674,7 +1686,7 @@ function App() {
           </article>
           <article>
             <span>剩余</span>
-            <strong>{remainingImages}</strong>
+            <strong>{isPendingMetadata ? '待解析' : remainingImages}</strong>
           </article>
         </div>
 
