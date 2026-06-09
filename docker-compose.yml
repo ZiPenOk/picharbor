@@ -1,0 +1,23 @@
+services:
+  picharbor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: picharbor
+    restart: unless-stopped
+    ports:
+      - "4177:4177"
+    environment:
+      PICHARBOR_HOST: 0.0.0.0
+      PICHARBOR_API_PORT: 4177
+      PICHARBOR_MEDIA_ROOT: /media
+      PICHARBOR_CONFIG_ROOT: /config
+      PICHARBOR_WEB_ROOT: /app/dist
+      PICHARBOR_DEMO_DATA: "false"
+      PICHARBOR_XCHINA_COOKIE_FILE: /config/cookies/xchina.txt
+      PICHARBOR_PROXY_FILE: /config/proxy.txt
+      PICHARBOR_FLARESOLVERR_FILE: /config/flaresolverr.txt
+      PICHARBOR_XCHINA_USER_AGENT_FILE: /config/xchina-user-agent.txt
+    volumes:
+      - /volume1/Nas/downloads/PicHarbor:/media
+      - /volume1/docker/PicHarbor:/config

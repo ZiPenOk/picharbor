@@ -1,0 +1,64 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.pid
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+cookies
+cookies/**
+*.cookie
+*.cookies
+*.netscape
+auth.json
+sessions.json
+
+# Runtime data
+server/downloads/*
+!server/downloads/.gitkeep
+server/config
+server/tmp
+albums
+tmp
+*.part
+*.download
+
+# Deployment bundles and local staging
+*.tgz
+*.tar
+*.tar.gz
+*.zip
+.synology-test
+picharbor-*.tgz
+
+# Local adapter/debug captures
+*_test.html
+*_check.html
+qg_*.js
+qiguang_*.html
+xchina_*.html
+8se_*.html
+public/redesign-preview.html
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
