@@ -4,6 +4,7 @@ import type {
   AppSettings,
   AuthInput,
   AuthStatus,
+  CreateTasksResult,
   CreateTaskInput,
   DownloadTask,
   SaveSettingsInput,
@@ -90,6 +91,14 @@ export async function loadAppData(): Promise<{ data: AppData; mode: 'api' | 'moc
 export async function createTask(input: CreateTaskInput): Promise<DownloadTask> {
   return requestJson<DownloadTask>('/api/tasks', {
     body: JSON.stringify(input),
+    headers,
+    method: 'POST',
+  })
+}
+
+export async function createTasks(urls: string[]): Promise<CreateTasksResult> {
+  return requestJson<CreateTasksResult>('/api/tasks/batch', {
+    body: JSON.stringify({ urls }),
     headers,
     method: 'POST',
   })

@@ -47,7 +47,7 @@ import {
 } from 'lucide-react'
 import { mockAppData } from './data/mockData'
 import {
-  createTask,
+  createTasks,
   inspectTaskUrls,
   loadAppData,
   loadAuthStatus,
@@ -230,6 +230,81 @@ function extractTaskUrls(input: string) {
   }
 
   return { invalid, urls }
+}
+
+function domainMatchesHost(domain: string, hostname: string) {
+  const normalizedDomain = domain.replace(/^\./, '').toLowerCase()
+  const normalizedHost = hostname.toLowerCase()
+  return normalizedHost === normalizedDomain || normalizedHost.endsWith(`.${normalizedDomain}`)
+}
+
+function sourceLooksSupported(source: Source, url: URL) {
+  const pathname = url.pathname
+  switch (source.id) {
+    case 'xchina':
+    case '8se':
+      return /^\/photo\/id-[^/]+\.html$/i.test(pathname)
+    case 'liuse':
+      return /^\/\d+\.html$/i.test(pathname)
+    case 'qiguangji':
+      return /^\/telegraph-album\/[^/?#]+\/?$/i.test(pathname)
+    default:
+      return source.domains.some((domain) => domainMatchesHost(domain, url.hostname))
+  }
+}
+
+function inspectUrlLocally(urlValue: string, sources: Source[], settingsData: AppSettings | null): TaskUrlInspection {
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(urlValue)
+  } catch {
+    return {
+      matched: false,
+      message: 'URL 格式不正确',
+      url: urlValue,
+      valid: false,
+    }
+  }
+
+  const adapter = sources.find((source) => {
+    if (!source.domains.some((domain) => domainMatchesHost(domain, parsedUrl.hostname))) {
+      return false
+    }
+    return sourceLooksSupported(source, parsedUrl)
+  })
+
+  if (!adapter) {
+    return {
+      hostname: parsedUrl.hostname,
+      matched: false,
+      message: '未识别到支持的站点规则',
+      normalizedUrl: parsedUrl.toString(),
+      url: urlValue,
+      valid: true,
+    }
+  }
+
+  const siteSettings = settingsData?.sites?.[adapter.id]
+  const flareSolverrConfigured = Boolean(settingsData?.flareSolverrUrl?.trim())
+
+  return {
+    adapterId: adapter.id,
+    adapterName: adapter.name,
+    adapterVersion: adapter.version,
+    capabilities: adapter.capabilities,
+    cookieConfigured: Boolean(siteSettings?.cookieConfigured),
+    cookieSource: siteSettings?.cookieSource ?? 'none',
+    domains: adapter.domains,
+    flareSolverrConfigured,
+    hostname: parsedUrl.hostname,
+    matched: true,
+    message: siteSettings?.cookieConfigured
+      ? `${adapter.name} 已本地识别，提交后后台会继续深度解析`
+      : `${adapter.name} 已本地识别，建议先检查 Cookie；提交后后台会继续深度解析`,
+    normalizedUrl: parsedUrl.toString(),
+    url: urlValue,
+    valid: true,
+  }
 }
 
 function paginateItems<T>(items: T[], page: number, pageSize: number) {
@@ -591,10 +666,19 @@ function App() {
         return
       }
 
+      const sampleUrls = parsed.urls.slice(0, 6)
+      if (sources.length && settingsData) {
+        if (!cancelled) {
+          setTaskUrlInspections([...invalidItems, ...sampleUrls.map((url) => inspectUrlLocally(url, sources, settingsData))])
+          setIsInspectingTaskUrls(false)
+        }
+        return
+      }
+
       setIsInspectingTaskUrls(true)
 
       try {
-        const items = await inspectTaskUrls(parsed.urls.slice(0, 6))
+        const items = await inspectTaskUrls(sampleUrls)
         if (!cancelled) {
           setTaskUrlInspections([...invalidItems, ...items])
         }
@@ -607,13 +691,13 @@ function App() {
           setIsInspectingTaskUrls(false)
         }
       }
-    }, taskUrl.trim() ? 360 : 0)
+    }, taskUrl.trim() ? 120 : 0)
 
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [taskUrl])
+  }, [settingsData, sources, taskUrl])
 
   const selectedAlbum = albums.find((album) => album.id === selectedAlbumId) ?? albums[0]
 
@@ -1200,17 +1284,9 @@ function App() {
     setTaskMessage('')
 
     try {
-      const createdTasks: DownloadTask[] = []
-      const failures: string[] = []
-
-      for (const url of parsedTasks.urls) {
-        try {
-          const task = await createTask({ url })
-          createdTasks.push(task)
-        } catch (error) {
-          failures.push(error instanceof Error ? error.message : `${url} 创建失败`)
-        }
-      }
+      const result = await createTasks(parsedTasks.urls)
+      const createdTasks = result.items
+      const failures = result.failures.map((item) => `${item.url}：${item.error}`)
 
       if (!createdTasks.length) {
         setTaskMessage(failures[0] ?? '创建任务失败')
@@ -1278,7 +1354,8 @@ function App() {
     setIsInspectingSourceDiagnostic(true)
 
     try {
-      const [result] = await inspectTaskUrls([input])
+      const [result] =
+        sources.length && settingsData ? [inspectUrlLocally(input, sources, settingsData)] : await inspectTaskUrls([input])
       setSourceDiagnosticResult(
         result ?? {
           matched: false,

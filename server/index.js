@@ -2543,6 +2543,39 @@ async function createTask(payload) {
   return { task: enrichTask(task), statusCode: 201 }
 }
 
+async function createTaskBatch(payload) {
+  const inputUrls = Array.isArray(payload?.urls) ? payload.urls : payload?.url ? [payload.url] : []
+  const urls = []
+  const seen = new Set()
+
+  for (const value of inputUrls) {
+    const trimmed = String(value ?? '').trim()
+    if (!trimmed || seen.has(trimmed)) {
+      continue
+    }
+    seen.add(trimmed)
+    urls.push(trimmed)
+  }
+
+  if (!urls.length) {
+    return { failures: [{ error: '请输入至少一个套图地址', url: '' }], items: [], statusCode: 200 }
+  }
+
+  const items = []
+  const failures = []
+
+  for (const url of urls) {
+    const result = await createTask({ ...payload, url })
+    if (result.error) {
+      failures.push({ error: result.error, url })
+      continue
+    }
+    items.push(enrichTask(result.task))
+  }
+
+  return { failures, items, statusCode: 200 }
+}
+
 async function inspectTaskUrls(payload) {
   const inputUrls = Array.isArray(payload?.urls) ? payload.urls : payload?.url ? [payload.url] : []
   const urls = inputUrls
@@ -2769,6 +2802,13 @@ async function route(req, res) {
   if (req.method === 'POST' && requestUrl.pathname === '/api/tasks/inspect') {
     const payload = await readBody(req)
     json(res, 200, await inspectTaskUrls(payload))
+    return
+  }
+
+  if (req.method === 'POST' && requestUrl.pathname === '/api/tasks/batch') {
+    const payload = await readBody(req)
+    const result = await createTaskBatch(payload)
+    json(res, result.statusCode, { failures: result.failures, items: result.items })
     return
   }
 

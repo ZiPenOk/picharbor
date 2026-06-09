@@ -93,6 +93,16 @@ export type CreateTaskInput = {
   adapterId?: string
 }
 
+export type TaskCreateFailure = {
+  error: string
+  url: string
+}
+
+export type CreateTasksResult = {
+  items: DownloadTask[]
+  failures: TaskCreateFailure[]
+}
+
 export type TaskUrlInspection = {
   url: string
   normalizedUrl?: string
